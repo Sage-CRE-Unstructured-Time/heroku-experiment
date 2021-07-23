@@ -1,0 +1,51 @@
+name: Check flyway migrations for datasets db
+on:
+  pull_request:
+    paths:
+    - 'sql/**'
+  # Allow the workflow to be triggered manually
+  workflow_dispatch:
+
+jobs:
+  migration-check:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # specific flyway version used in repo at time of development, version mentioned in flywaydb site, and latest version
+        flyway-version: [ '7.5.3', '7.7.0', 'latest' ]
+      fail-fast: false
+    env:
+      db_name: datasets
+
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v2
+
+    - name: Start up postgres
+      run: |
+        docker run -d -v $PWD/sql/init.sql:/docker-entrypoint-initdb.d/init.sql \
+          -p 8080:5432 \
+          -e POSTGRES_USER=docker \
+          -e POSTGRES_PASSWORD=docker \
+          --health-cmd pg_isready \
+          --health-interval 10s \
+          --health-timeout 5s \
+          --health-retries 5 \
+          postgres:11 
+
+    - name: Get the flyway container
+      run: |
+        docker pull flyway/flyway:${{ matrix.flyway-version }}
+
+    - name: Attempt migration
+      # We require `--network host` to ensure that the docker container being run shares its network
+      # with the "host" network. In this case, the host is the ubuntu runner and allows us to 
+      # access "localhost:8080" as if we were running directly on the host machine even though the 
+      # command is being run within a docker container
+      run: |
+        docker run --network host -v $PWD/sql:/flyway/sql flyway/flyway:${{ matrix.flyway-version }} \
+          -url=jdbc:postgresql://localhost:8080/$db_name \
+          -user=docker \
+          -password=docker \
+          -connectRetries=5 \
+          migrate
